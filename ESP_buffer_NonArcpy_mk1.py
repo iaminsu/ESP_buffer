@@ -2,9 +2,12 @@
 import pysal, shapefile, networkx, time, cPickle, random, math, copy, Convexpath_module
 from shapely.geometry import Point, Polygon, LineString, MultiPoint, MultiPolygon
 from shapely.ops import cascaded_union
+from arcpy import env, Dissolve_management, Union_analysis, Intersect_analysis, Erase_analysis
 
+
+env.overwriteOutput = True
 path = "E:\\data\\esp_cover\\data\\"
-
+env.workspace = path
 
 facil = "pt1.shp"
 obstacles_f = "convex_obstacles.shp"
@@ -269,6 +272,10 @@ def cutting_box (sLine1, sLine2, inCircle, circleCenter):
     return cutting_box_1, cutting_box_2
 
 #initializing objects 
+def file2Shp(in_file):
+    f_pysal = pysal.IOHandlers.pyShpIO.shp_file(path + in_file)
+    f_shp = generateGeometry(f_pysal)
+    return f_shp
 
 facil_pysal = pysal.IOHandlers.pyShpIO.shp_file(path+facil)
 obstacles_pysal = pysal.IOHandlers.pyShpIO.shp_file(path + obstacles_f)
@@ -278,6 +285,7 @@ facil_coords = list(facil_shp[0].coords)
 
 #generate initial, circular coverage 
 cover_shp = facil_shp[0].buffer(coverage_distance)
+saveShp([cover_shp], 'polygon', path, 'cover_shp.shp')
 IminX, IminY, ImaxX, ImaxY = cover_shp.bounds 
 ImaxXLine = LineString([[ImaxX, ImaxY], [ImaxX, IminY]])
 ImaxYLine = LineString([[IminX, ImaxY], [ImaxX, ImaxY]])
@@ -288,6 +296,7 @@ boundingBox = Polygon([(IminX, IminY), (IminX, ImaxY), (ImaxX, ImaxY), (ImaxX, I
 #generate set of obstacles for circular cover 
 clip_obs_shp = [x.intersection(cover_shp) for x in obstacles_shp]
 clip_obs_shp = [x for x in clip_obs_shp if not x.is_empty]
+init_clip_obs_shp = [x for x in clip_obs_shp if not x.is_empty]
 
 terminate = False
 #begin main loop 
@@ -297,21 +306,27 @@ while terminate == False:
     #first loop: generate 
     #For each iteration, list of obstacles is updated using updated coverage. 
     #Remove obstacles that cannot be covered with the updated coverage 
-    clip_obs_shp = [x.intersection(cover_shp) for x in clip_obs_shp]
-    clip_obs_shp = [x for x in clip_obs_shp if not x.is_empty]    
     clip_obs_shp = [x for x in clip_obs_shp if not x in dealt_obs]
+    saveShp(clip_obs_shp, 'polygon', path, 'clip_obs.shp')
+    Intersect_analysis(['cover_shp.shp', 'clip_obs.shp'], 'clip_obs_inter.shp')
+    clip_obs_multi = file2Shp('clip_obs_inter.shp')
+    
+    #clip_obs_shp = [x.intersection(cover_shp) for x in clip_obs_shp]
+    #clip_obs_shp = [x for x in clip_obs_shp if not x.is_empty]    
+    
     #convex hulls for clipped obstacles
     #sort them as distance between facility and centorids 
     cent_clip_obs = [(x.centroid, x) for x in clip_obs_shp]
     cent_dist_clip_obs = [(x[0].distance(facil_shp[0]), x[1]) for x in cent_clip_obs]
     cent_dist_clip_obs.sort()
     dealt_obs.append(cent_dist_clip_obs[0][1])
+    saveShp([cent_dist_clip_obs[0][1]], 'polygon', path, 'dealtobs.shp')
     chs = [(createConvexhull(x[1], facil_coords), x[1]) for x in cent_dist_clip_obs]
     #pick closest one to facility 
     ch_vertices = list(chs[0][0].exterior.coords)
     ch_vertices = list(set(ch_vertices))    
     ch_vertices = [x for x in ch_vertices if not Point(x) == facil_shp[0]]
-    ch_v_esp = [(x, Convexpath_module.Convexpath_shapely(path, facil_shp[0], Point(x), clip_obs_shp).esp) for x in ch_vertices]    
+    ch_v_esp = [(x, Convexpath_module.Convexpath_shapely(path, facil_shp[0], Point(x), init_clip_obs_shp).esp) for x in ch_vertices]    
     ch_v_esp = [(x[1].length, x) for x in ch_v_esp]
     ch_v_esp.sort()
     #Initial split vertex (ISV) 1
@@ -342,18 +357,29 @@ while terminate == False:
     v1_p = [x for x in v1_coords if x in bound_coords]
     v2_p = [x for x in v2_coords if x in bound_coords]  
     gg = bound_coords[bound_coords.index(v1_p[0]):bound_coords.index(v2_p[0]) + 1]
-    missing_piece.extend(gg)
-    missing_piece.extend(v2_coords)
-    missing_piece = list(set(missing_piece))
+    for i in gg:
+        if not i in missing_piece:
+            missing_piece.append(i)
+    for i in v2_coords:
+        if not i in missing_piece:
+            missing_piece.append(i)
+        
     missing_poly = Polygon(missing_piece)
-    
     
     cutting_box_1, cutting_box_2 = cutting_box(isl1, isl2, cover_shp, facil_coords[0])
     cutbox = [x for x in (cutting_box_1, cutting_box_2) if cent_dist_clip_obs[0][1].centroid.intersects(x)]
     other_cutbox = [x for x in (cutting_box_1, cutting_box_2) if x not in cutbox]
-    intial_sector = cover_shp.intersection(cutbox[0])  
-    saveShp([intial_sector], 'polygon', path, 'intial_sector')
-    other_sector = cover_shp.intersection(other_cutbox[0])
+    saveShp([cutbox[0]], 'polygon', path, 'cutbox_0')
+    saveShp(other_cutbox, 'polygon', path, 'othercutbox')
+    Intersect_analysis(['cover_shp.shp', 'cutbox_0.shp'], 'initial_sector.shp')
+    Intersect_analysis(['cover_shp.shp', 'othercutbox.shp'], 'other_sector.shp')
+    #intial_sector = cover_shp.intersection(cutbox[0])  
+    #saveShp([intial_sector], 'polygon', path, 'intial_sector')
+    #other_sector = cover_shp.intersection(other_cutbox[0])
+    #saveShp([other_sector], 'polygon', path, 'other_sector')
+    saveShp([missing_poly], 'polygon', path, 'missing_poly')
+    Union_analysis(['other_sector.shp', 'missing_poly.shp'], 'union.shp')
+    Dissolve_management('union.shp', 'union_dissol.shp')
     v1_sLines = [isl1]
     v2_sLines = [isl2]
     v1_overlap = [list(v1_esps[-1][1][1].coords)[-1] ,list(v2_esps[-1][1][1].coords)[-1]]
@@ -427,15 +453,31 @@ while terminate == False:
         cutbox = [x for x in (cutting_box_1, cutting_box_2) if not cent_dist_clip_obs[0][1].centroid.intersects(x)]
         sector = temp_bf_shp.intersection(cutbox[0]) 
         v2_sectors.append(sector)
-       
+    intial_sector = file2Shp("initial_sector.shp")[0]
     sectors = intial_sector.intersection(cascaded_union(v1_sectors + v2_sectors))
+    sectors_bd = sectors.boundary
+    sbd_vertices = list(sectors_bd.coords)
+    fixed_sbd_v = []
+    for i in sbd_vertices:
+        if sbd_vertices.count(i) == 1:
+            fixed_sbd_v.append(i)
+        else:
+            if not i in fixed_sbd_v:
+                fixed_sbd_v.append(i)
+    sectors = Polygon(fixed_sbd_v)
     saveShp([sectors], 'polygon', path, 'sectors')
-    #new_cover = cascaded_union([sectors, missing_poly])
-    #saveShp([new_cover], 'polygon', path, 'new_cover')
-    cover_shp = cascaded_union([other_sector, sectors, missing_poly])
-    saveShp([cover_shp], 'polygon', path, 'cover_shp')
+    Union_analysis(['sectors.shp', 'union_dissol.shp'], 'union_2.shp')
+    Dissolve_management('union_2.shp', 'union_2_dissol.shp')
+    Erase_analysis('union_2_dissol.shp', 'dealtobs.shp', 'cover_shp.shp')
+    cover_shp = file2Shp('cover_shp.shp')[0]
+    
 
+"""
+1. Union: other sector + missing poly
+2. Dissolve: 1
+3. Union: 2 + sectors
+4. Dissolve: 3
 
-
+"""
 
 
