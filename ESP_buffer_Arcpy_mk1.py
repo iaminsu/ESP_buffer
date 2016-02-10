@@ -30,6 +30,12 @@ def generateGeometry(in_shp):
         for i in range(len(in_shp)):
             resultingGeometry.append(Polygon(in_shp.get_shape(i)['Vertices']))
     return resultingGeometry  
+
+def file2Shp(in_file):
+    f_pysal = pysal.IOHandlers.pyShpIO.shp_file(path + in_file)
+    f_shp = generateGeometry(f_pysal)
+    return f_shp
+
 def createConvexhull(poly, endPoints = []):
     convexVerticex = []
     if poly.type == 'MultiPolygon':
@@ -280,6 +286,7 @@ facil_coords = list(facil_shp[0].coords)
 
 #generate initial, circular coverage 
 arcpy.Buffer_analysis(facil, cover, str(coverage_distance) + " Feet")
+cover_shp = file2Shp(cover)
 #cover_shp = facil_shp[0].buffer(coverage_distance)
 IminX, IminY, ImaxX, ImaxY = cover_shp.bounds 
 ImaxXLine = LineString([[ImaxX, ImaxY], [ImaxX, IminY]])
